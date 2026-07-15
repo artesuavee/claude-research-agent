@@ -9,6 +9,8 @@ import requests
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 
+from config import settings
+
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -17,7 +19,17 @@ _TIMEOUT = 15
 _notes: list[dict] = []
 
 
-def search_web(query: str, max_results: int = 5) -> str:
+def _use_tavily() -> bool:
+    """Return True when Tavily should be used for web searches."""
+    if settings.search_provider == "tavily":
+        return True
+    if settings.search_provider == "duckduckgo":
+        return False
+    # Fallback: use Tavily if an API key is present
+    return bool(settings.tavily_api_key)
+
+
+def _search_web_ddg(query: str, max_results: int = 5) -> str:
     """Search the web via DuckDuckGo. Returns JSON with a list of results."""
     try:
         raw = DDGS().text(query, max_results=max_results)
@@ -34,6 +46,35 @@ def search_web(query: str, max_results: int = 5) -> str:
         if r.get("href")
     ]
     return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+
+
+def _search_web_tavily(query: str, max_results: int = 5) -> str:
+    """Search the web via Tavily. Returns JSON with the same shape as DuckDuckGo."""
+    try:
+        from tavily import TavilyClient
+
+        client = TavilyClient(api_key=settings.tavily_api_key)
+        response = client.search(query=query, max_results=max_results)
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"query": query, "error": f"search failed: {exc}"})
+
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+        }
+        for r in response.get("results", [])
+        if r.get("url")
+    ]
+    return json.dumps({"query": query, "results": results}, ensure_ascii=False)
+
+
+def search_web(query: str, max_results: int = 5) -> str:
+    """Search the web. Routes to Tavily or DuckDuckGo based on config."""
+    if _use_tavily():
+        return _search_web_tavily(query, max_results)
+    return _search_web_ddg(query, max_results)
 
 
 def fetch_page(url: str, max_chars: int = 5000) -> str:
